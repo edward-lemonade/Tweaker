@@ -1,0 +1,12 @@
+{
+    "Hand": {
+        "x": "number",
+        "y": "number",
+        "vx": "number",
+        "vy": "number",
+        "pose": {
+            "type": "enum",
+            "values": ["FLAT", "PINCH", "POINT", "IDLE", "AWAY"]
+        }
+    }
+}

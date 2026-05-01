@@ -1,0 +1,26 @@
+{
+	"GESTURE": {
+		"leftHand": "Hand",
+		"rightHand": "Hand",
+        "timestamp": "number"
+	},
+
+	"AUDIO_CONTROL": {
+		"action": "string",
+		"deck": "number",
+		"value": "number",
+		"timestamp": "number"
+	},
+
+	"AUDIO_FEEDBACK": {
+		"type": "string",
+		"deck": "number",
+		"data": "object",
+        "timestamp": "number"
+	},
+
+	"SYSTEM": {
+		"type": "string",
+		"timestamp": "number"
+	}
+}

@@ -1,0 +1,6 @@
+{
+    "GESTURE":        "CV -> FLUTTER",
+    "AUDIO_CONTROL":  "FLUTTER -> AUDIO",
+    "AUDIO_FEEDBACK": "AUDIO -> FLUTTER",
+    "SYSTEM":         "SYSTEM"
+}
