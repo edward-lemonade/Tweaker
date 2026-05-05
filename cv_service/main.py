@@ -1,3 +1,4 @@
+import argparse
 import cv2
 import mediapipe as mp
 import math
@@ -5,9 +6,9 @@ import time
 import threading
 import pathlib
 
-from schema   import Hand, Pose, AWAY_HAND
-from velocity import VelocityTracker
-import overlay
+from schema    import Hand, Pose, AWAY_HAND
+from velocity  import VelocityTracker
+from messaging import emit
 
 BaseOptions = mp.tasks.BaseOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
@@ -25,23 +26,6 @@ MIDDLE_TIP = 12
 RING_TIP = 16
 PINKY_TIP = 20
 FINGER_BASES = [2, 6, 10, 14, 18]
-HAND_CONNECTIONS = [
-    (0,1),(1,2),(2,3),(3,4),            # thumb
-    (0,5),(5,6),(6,7),(7,8),            # index
-    (5,9),(9,10),(10,11),(11,12),       # middle
-    (9,13),(13,14),(14,15),(15,16),     # ring
-    (13,17),(17,18),(18,19),(19,20),    # pinky
-    (0,17),                             # palm base
-]
-
-
-def draw_skeleton(frame, landmarks, w: int, h: int) -> None:
-    pts = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks]
-    for a, b in HAND_CONNECTIONS:
-        cv2.line(frame, pts[a], pts[b], (80, 200, 80), 2, cv2.LINE_AA)
-    for x, y in pts:
-        cv2.circle(frame, (x, y), 4, (255, 255, 255), -1, cv2.LINE_AA)
-        cv2.circle(frame, (x, y), 4, (50, 150, 50),   1,  cv2.LINE_AA)
 
 def _dist(a, b) -> float:
     return math.hypot(a.x - b.x, a.y - b.y)
@@ -87,6 +71,17 @@ def classify_pose(lms: list) -> Pose:
     # idle
     return Pose.IDLE
 
+def _build_hand(lm, tracker: VelocityTracker) -> Hand:
+    pointer = lm[POINTER_TIP]
+    vx, vy  = tracker.update(pointer.x, pointer.y)
+    return Hand(
+        x    = round(pointer.x, 6),
+        y    = round(pointer.y, 6),
+        vx   = round(vx, 2),
+        vy   = round(vy, 2),
+        pose = classify_pose(lm),
+    )
+
 class _ResultHolder:
     def __init__(self):
         self._result = None
@@ -101,6 +96,10 @@ class _ResultHolder:
             return self._result
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--port', type=int, default=5555)
+    args = parser.parse_args()
+
     if not MODEL_PATH.exists():
         raise FileNotFoundError(
             f"Model not found: {MODEL_PATH}\n"
@@ -117,15 +116,14 @@ def main():
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    tracker = VelocityTracker(frame_w, frame_h)
+    tracker_left  = VelocityTracker(frame_w, frame_h)
+    tracker_right = VelocityTracker(frame_w, frame_h)
     holder = _ResultHolder()
-    tick_hz = cv2.getTickFrequency()
-    prev_t = cv2.getTickCount()
 
     options = HandLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=str(MODEL_PATH)),
         running_mode=VisionRunningMode.LIVE_STREAM,
-        num_hands=1,
+        num_hands=2,
         min_hand_detection_confidence=0.6,
         min_tracking_confidence=0.5,
         result_callback=holder.update,
@@ -146,43 +144,30 @@ def main():
             )
             landmarker.detect_async(mp_image, ts_ms)
 
-            # build hand from latest result
+            # build hands from latest result
+            left_hand = AWAY_HAND
+            right_hand = AWAY_HAND
+
             result = holder.get()
             if result and result.hand_landmarks:
-                lm = result.hand_landmarks[0]
-                pointer = lm[POINTER_TIP]
-                vx, vy = tracker.update(pointer.x, pointer.y)
-                hand = Hand(
-                    x = round(pointer.x, 6),
-                    y = round(pointer.y, 6),
-                    vx = round(vx, 2),
-                    vy = round(vy, 2),
-                    pose = classify_pose(lm),
-                )
-                draw_skeleton(frame, lm, frame_w, frame_h)
+                for i, lm in enumerate(result.hand_landmarks):
+                    # handedness[i].category_name is "Left" or "Right" (mirrored after flip)
+                    side = result.handedness[i][0].category_name.lower()
+                    if side == 'left':
+                        left_hand  = _build_hand(lm, tracker_left)
+                    elif side == 'right':
+                        right_hand = _build_hand(lm, tracker_right)
             else:
-                tracker.reset()
-                hand = AWAY_HAND
+                tracker_left.reset()
+                tracker_right.reset()
 
             # Emit
-            print(hand.as_dict())
-
-            # FPS
-            now    = cv2.getTickCount()
-            fps    = tick_hz / (now - prev_t)
-            prev_t = now
-
-            overlay.draw(frame, hand, fps)
-            cv2.imshow("Hand Gesture Capture", frame)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key in (ord("q"), ord("Q"), 27):
-                break
-            if key in (ord("o"), ord("O")):
-                overlay.toggle()
+            emit(args.port, 'GESTURE', {
+                'leftHand':  left_hand.as_dict(),
+                'rightHand': right_hand.as_dict(),
+            })
 
     cap.release()
-    cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

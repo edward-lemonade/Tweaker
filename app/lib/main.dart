@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 import 'screens/play.dart';
+import 'services/hand_service.dart';
+
+const cvDirectory = String.fromEnvironment('CV_SERVICE_DIR');
+final handService = HandService(pythonDir: cvDirectory);
 
 void main() {
+  print('[main] CV_SERVICE_DIR: $cvDirectory');
 	runApp(const MyApp());
 }
 
@@ -15,7 +20,7 @@ class MyApp extends StatelessWidget {
 			theme: ThemeData(
 				colorScheme: ColorScheme.fromSeed(seedColor: const Color.fromARGB(255, 38, 98, 15)),
 			),
-			home: const PlayPage(title: 'Flutter Demo Home Page'),
+			home: PlayScreen(handService: handService),
 		);
 	}
 }

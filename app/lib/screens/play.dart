@@ -1,47 +1,94 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
-class PlayPage extends StatefulWidget {
-	const PlayPage({super.key, required this.title});
+import '../models/events.dart';
+import '../models/hand.dart';
+import '../services/hand_service.dart';
 
-	final String title;
+// =====================================================================
+// Screen
+
+class PlayScreen extends StatefulWidget {
+	const PlayScreen({super.key, required this.handService});
+
+	final HandService handService;
 
 	@override
-	State<PlayPage> createState() => _PlayPageState();
+	State<PlayScreen> createState() => _PlayScreenState();
 }
 
-class _PlayPageState extends State<PlayPage> {
-	int _counter = 0;
+// =====================================================================
+// State
 
-	void _incrementCounter() {
-		setState(() {
-			_counter++;
-			_counter += 3;
+class _PlayScreenState extends State<PlayScreen> {
+	GestureEvent? _latest;
+	StreamSubscription<GestureEvent>? _sub;
+
+	@override
+	void initState() {
+		super.initState();
+		widget.handService.start();
+		_sub = widget.handService.stream.listen((event) {
+			if (mounted) setState(() => _latest = event);
 		});
+	}
+
+	@override
+	void dispose() {
+		_sub?.cancel();
+		widget.handService.stop();
+		super.dispose();
 	}
 
 	@override
 	Widget build(BuildContext context) {
 		return Scaffold(
-			appBar: AppBar(
-				backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-				title: Text(widget.title),
+			backgroundColor: Colors.black,
+			body: LayoutBuilder(
+				builder: (context, constraints) {
+					final size = constraints.biggest;
+					return Stack(
+						children: [
+							if (_latest != null) ...[
+								if (_latest!.leftHand.pose != HandPose.away)
+									_HandWidget(hand: _latest!.leftHand, size: size),
+								if (_latest!.rightHand.pose != HandPose.away)
+									_HandWidget(hand: _latest!.rightHand, size: size),
+							],
+						],
+					);
+				},
 			),
-			body: Center(
-				child: Column(
-					mainAxisAlignment: MainAxisAlignment.center,
-					children: [
-						const Text('You have pushed the button this many times:'),
-						Text(
-							'$_counter',
-							style: Theme.of(context).textTheme.headlineMedium,
-						),
-					],
+		);
+	}
+}
+
+// =====================================================================
+// Hand Widget
+
+class _HandWidget extends StatelessWidget {
+	const _HandWidget({required this.hand, required this.size});
+
+	final Hand hand;
+	final Size size;
+
+	Offset get _offset => Offset(hand.x * size.width, hand.y * size.height);
+
+	@override
+	Widget build(BuildContext context) {
+		const diameter = 64.0;
+		return Positioned(
+			left: _offset.dx - diameter / 2,
+			top:  _offset.dy - diameter / 2,
+			child: Container(
+				width: diameter,
+				height: diameter,
+				decoration: BoxDecoration(
+					color: Colors.white.withOpacity(0.9),
+					shape: BoxShape.circle,
 				),
-			),
-			floatingActionButton: FloatingActionButton(
-				onPressed: _incrementCounter,
-				tooltip: 'Increment',
-				child: const Icon(Icons.add),
+				child: const Icon(Icons.back_hand, size: 32),
 			),
 		);
 	}
