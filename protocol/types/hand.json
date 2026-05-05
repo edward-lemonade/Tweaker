@@ -4,6 +4,7 @@
         "y": "number",
         "vx": "number",
         "vy": "number",
+        "theta": "number",
         "pose": {
             "type": "enum",
             "values": ["FLAT", "PINCH", "POINT", "IDLE", "AWAY"]

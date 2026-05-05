@@ -13,6 +13,15 @@ _POSE_LABEL = {
     Pose.AWAY: "AWAY",
 }
 
+_CONNECTIONS = [
+    (0,1),(1,2),(2,3),(3,4),       # thumb
+    (0,5),(5,6),(6,7),(7,8),       # index
+    (0,9),(9,10),(10,11),(11,12),  # middle
+    (0,13),(13,14),(14,15),(15,16),# ring
+    (0,17),(17,18),(18,19),(19,20),# pinky
+    (5,9),(9,13),(13,17),          # palm
+]
+
 _enabled: bool = True
 def enable() -> None: global _enabled; _enabled = True
 def disable() -> None: global _enabled; _enabled = False
@@ -49,3 +58,17 @@ def draw(frame, hand: Hand, fps: float) -> None:
     cv2.rectangle(frame, (0, 0), (w, 36), _OVERLAY_BG, -1)
     cv2.putText(frame, "Hand Gesture Capture  |  Q/Esc quit  O toggle overlay",
                 (12, 24), _FONT, 0.58, _TEXT, 1, cv2.LINE_AA)
+    
+def draw_landmarks(frame, hand_landmarks) -> None:
+    if not _enabled or hand_landmarks is None:
+        return
+
+    h, w = frame.shape[:2]
+    pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
+
+    for a, b in _CONNECTIONS:
+        cv2.line(frame, pts[a], pts[b], _ACCENT, 2, cv2.LINE_AA)
+
+    for x, y in pts:
+        cv2.circle(frame, (x, y), 4, _TEXT, -1, cv2.LINE_AA)
+        cv2.circle(frame, (x, y), 4, _ACCENT, 1, cv2.LINE_AA)

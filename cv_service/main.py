@@ -1,133 +1,81 @@
 import argparse
+import time
+
 import cv2
 import mediapipe as mp
-import math
-import time
-import threading
-import pathlib
+import numpy as np
 
-from schema    import Hand, Pose, AWAY_HAND
-from velocity  import VelocityTracker
+import overlay
 from messaging import emit
+from schema import AWAY_HAND, Pose
+from tracking.blob_tracker import SkinBlobTracker, track_with_blob
+from tracking.dead_reckoning_tracker import handle_missing_hand, track_with_dead_reckoning
+from tracking.mediapipe_tracker import MODEL_PATH, ResultHolder, create_image, create_options, track_with_mediapipe
+from velocity import VelocityTracker
 
-BaseOptions = mp.tasks.BaseOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
-HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
-HandLandmarkerResult = mp.tasks.vision.HandLandmarkerResult
-VisionRunningMode = mp.tasks.vision.RunningMode
 
-MODEL_PATH = pathlib.Path(__file__).parent / "hand_landmarker.task"
+AWAY_AFTER_MS = 200
 
-# landmark indices
-WRIST = 0
-THUMB_TIP = 4
-POINTER_TIP = 8
-MIDDLE_TIP = 12
-RING_TIP = 16
-PINKY_TIP = 20
-FINGER_BASES = [2, 6, 10, 14, 18]
-
-def _dist(a, b) -> float:
-    return math.hypot(a.x - b.x, a.y - b.y)
-
-def _hand_axis(lm) -> tuple[float, float]:
-    # wrist to middle finger unit vector
-    dx = lm[9].x - lm[WRIST].x
-    dy = lm[9].y - lm[WRIST].y
-    mag = math.hypot(dx, dy) or 1e-6
-    return dx / mag, dy / mag
-
-def _project(lm, idx: int, ax: tuple[float, float]) -> float:
-    # projection of landmark idx onto axis ax, relative to wrist
-    return (lm[idx].x - lm[WRIST].x) * ax[0] + (lm[idx].y - lm[WRIST].y) * ax[1]
-
-def _finger_up(lm, tip: int, base: int, axis: tuple[float, float]) -> bool:
-    return _project(lm, tip, axis) > _project(lm, base, axis)
-
-def classify_pose(lms: list) -> Pose:
-    axis = _hand_axis(lms)
-    hand_size = _dist(lms[WRIST], lms[MIDDLE_TIP]) or 1e-6
-    fingers = [
-        _finger_up(lms, THUMB_TIP,      FINGER_BASES[0], axis),
-        _finger_up(lms, POINTER_TIP,    FINGER_BASES[1], axis),
-        _finger_up(lms, MIDDLE_TIP,     FINGER_BASES[2], axis),
-        _finger_up(lms, RING_TIP,       FINGER_BASES[3], axis),
-        _finger_up(lms, PINKY_TIP,      FINGER_BASES[4], axis),
-    ]
-    _, pointer, middle, ring, pinky = fingers
-
-    # pinch
-    if _dist(lms[THUMB_TIP], lms[POINTER_TIP]) / hand_size < 0.25:
-        return Pose.PINCH
-    
-    # flat
-    if sum(fingers) >= 4:
-        return Pose.FLAT
-    
-    # point
-    if pointer and not middle and not ring and not pinky:
-        return Pose.POINT
-    
-    # idle
-    return Pose.IDLE
-
-def _build_hand(lm, tracker: VelocityTracker) -> Hand:
-    pointer = lm[POINTER_TIP]
-    vx, vy  = tracker.update(pointer.x, pointer.y)
-    return Hand(
-        x    = round(pointer.x, 6),
-        y    = round(pointer.y, 6),
-        vx   = round(vx, 2),
-        vy   = round(vy, 2),
-        pose = classify_pose(lm),
-    )
-
-class _ResultHolder:
-    def __init__(self):
-        self._result = None
-        self._lock = threading.Lock()
- 
-    def update(self, result, *_):
-        with self._lock:
-            self._result = result
- 
-    def get(self):
-        with self._lock:
-            return self._result
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=5555)
+    parser.add_argument("--port", type=int, default=5555)
+    parser.add_argument("--debug", action="store_true", help="Show video capture window with overlay")
+    parser.add_argument(
+        "--hands-only",
+        action="store_true",
+        help="Draw hands on black instead of video feed (requires --debug)",
+    )
+    parser.add_argument(
+        "--exposure",
+        type=int,
+        default=-6,
+        help="Manual exposure value (log2 s, e.g. -6 ≈ 1/64 s). Pass 0 to keep auto.",
+    )
+    parser.add_argument(
+        "--sharpen-strength",
+        type=float,
+        default=0.8,
+        help="Unsharp-mask blend weight (0 = off). Default 0.8.",
+    )
+    parser.add_argument("--no-blob", action="store_true", help="Disable skin-blob fallback tracker.")
     args = parser.parse_args()
 
     if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            f"Model not found: {MODEL_PATH}\n"
-            "Run  python download_model.py  first."
-        )
+        raise FileNotFoundError(f"Model not found: {MODEL_PATH}\nRun  python download_model.py  first.")
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         raise RuntimeError("Cannot open camera.")
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    if args.exposure != 0:
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+        cap.set(cv2.CAP_PROP_EXPOSURE, args.exposure)
 
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    tracker_left  = VelocityTracker(frame_w, frame_h)
+    tracker_left = VelocityTracker(frame_w, frame_h)
     tracker_right = VelocityTracker(frame_w, frame_h)
-    holder = _ResultHolder()
+    blob_left = SkinBlobTracker(frame_w, frame_h)
+    blob_right = SkinBlobTracker(frame_w, frame_h)
+    holder = ResultHolder()
+    options = create_options(holder.update)
 
-    options = HandLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=str(MODEL_PATH)),
-        running_mode=VisionRunningMode.LIVE_STREAM,
-        num_hands=2,
-        min_hand_detection_confidence=0.6,
-        min_tracking_confidence=0.5,
-        result_callback=holder.update,
-    )
+    last_left = AWAY_HAND
+    last_right = AWAY_HAND
+    last_seen_ms = int(time.monotonic() * 1000)
+    last_lm_left = None
+    last_lm_right = None
+    blob_offset_left = (0.0, 0.0)
+    blob_offset_right = (0.0, 0.0)
+    fps_timer = time.monotonic()
+    fps = 0.0
+    mode_left = "mp"
+    mode_right = "mp"
 
     with HandLandmarker.create_from_options(options) as landmarker:
         while True:
@@ -137,37 +85,176 @@ def main():
 
             frame = cv2.flip(frame, 1)
             ts_ms = int(time.monotonic() * 1000)
+            ts_s = ts_ms / 1000.0
 
-            mp_image = mp.Image(
-                image_format=mp.ImageFormat.SRGB,
-                data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
-            )
-            landmarker.detect_async(mp_image, ts_ms)
+            if args.sharpen_strength > 0:
+                blur = cv2.GaussianBlur(frame, (0, 0), sigmaX=2.5, sigmaY=2.5)
+                frame = cv2.addWeighted(frame, 1.0 + args.sharpen_strength, blur, -args.sharpen_strength, 0)
 
-            # build hands from latest result
+            landmarker.detect_async(create_image(frame), ts_ms)
+            result = holder.get()
+
             left_hand = AWAY_HAND
             right_hand = AWAY_HAND
+            draw_lm_left = None
+            draw_lm_right = None
+            blob_dbg_left = None
+            blob_dbg_right = None
 
-            result = holder.get()
-            if result and result.hand_landmarks:
-                for i, lm in enumerate(result.hand_landmarks):
-                    # handedness[i].category_name is "Left" or "Right" (mirrored after flip)
-                    side = result.handedness[i][0].category_name.lower()
-                    if side == 'left':
-                        left_hand  = _build_hand(lm, tracker_left)
-                    elif side == 'right':
-                        right_hand = _build_hand(lm, tracker_right)
+            mp_output = track_with_mediapipe(
+                result=result,
+                frame_bgr=frame,
+                ts_s=ts_s,
+                tracker_left=tracker_left,
+                tracker_right=tracker_right,
+                blob_left=blob_left,
+                blob_right=blob_right,
+            )
+
+            if mp_output.detected:
+                left_hand = mp_output.left_hand
+                right_hand = mp_output.right_hand
+                draw_lm_left = mp_output.draw_lm_left
+                draw_lm_right = mp_output.draw_lm_right
+                last_lm_left = mp_output.last_lm_left
+                last_lm_right = mp_output.last_lm_right
+                blob_offset_left = mp_output.blob_offset_left
+                blob_offset_right = mp_output.blob_offset_right
+                last_left = left_hand
+                last_right = right_hand
+                last_seen_ms = ts_ms
+                mode_left = "mp"
+                mode_right = "mp"
             else:
-                tracker_left.reset()
-                tracker_right.reset()
+                dt = (ts_ms - last_seen_ms) / 1000.0
 
-            # Emit
-            emit(args.port, 'GESTURE', {
-                'leftHand':  left_hand.as_dict(),
-                'rightHand': right_hand.as_dict(),
-            })
+                missing = handle_missing_hand(
+                    ts_ms=ts_ms,
+                    last_seen_ms=last_seen_ms,
+                    away_after_ms=AWAY_AFTER_MS,
+                    last_hand=last_left,
+                    last_lm=last_lm_left,
+                    vel_tracker=tracker_left,
+                    blob_tracker=blob_left,
+                )
+                if missing is not None:
+                    last_left, last_lm_left, draw_lm_left, blob_dbg_left, mode_left = missing
+                else:
+                    blob_hit = None
+                    if not args.no_blob:
+                        blob_hit = track_with_blob(
+                            frame=frame,
+                            ts_s=ts_s,
+                            last_hand=last_left,
+                            last_lm=last_lm_left,
+                            vel_tracker=tracker_left,
+                            blob_tracker=blob_left,
+                            blob_offset=blob_offset_left,
+                        )
+                    if blob_hit is not None:
+                        last_left, last_lm_left, draw_lm_left, blob_dbg_left, mode_left = blob_hit
+                    else:
+                        last_left, last_lm_left, draw_lm_left, blob_dbg_left, mode_left = track_with_dead_reckoning(
+                            last_hand=last_left,
+                            last_lm=last_lm_left,
+                            vel_tracker=tracker_left,
+                            dt_s=dt,
+                        )
+
+                missing = handle_missing_hand(
+                    ts_ms=ts_ms,
+                    last_seen_ms=last_seen_ms,
+                    away_after_ms=AWAY_AFTER_MS,
+                    last_hand=last_right,
+                    last_lm=last_lm_right,
+                    vel_tracker=tracker_right,
+                    blob_tracker=blob_right,
+                )
+                if missing is not None:
+                    last_right, last_lm_right, draw_lm_right, blob_dbg_right, mode_right = missing
+                else:
+                    blob_hit = None
+                    if not args.no_blob:
+                        blob_hit = track_with_blob(
+                            frame=frame,
+                            ts_s=ts_s,
+                            last_hand=last_right,
+                            last_lm=last_lm_right,
+                            vel_tracker=tracker_right,
+                            blob_tracker=blob_right,
+                            blob_offset=blob_offset_right,
+                        )
+                    if blob_hit is not None:
+                        last_right, last_lm_right, draw_lm_right, blob_dbg_right, mode_right = blob_hit
+                    else:
+                        last_right, last_lm_right, draw_lm_right, blob_dbg_right, mode_right = track_with_dead_reckoning(
+                            last_hand=last_right,
+                            last_lm=last_lm_right,
+                            vel_tracker=tracker_right,
+                            dt_s=dt,
+                        )
+
+                left_hand = last_left
+                right_hand = last_right
+
+            emit(
+                args.port,
+                "GESTURE",
+                {
+                    "leftHand": left_hand.as_dict(),
+                    "rightHand": right_hand.as_dict(),
+                },
+            )
+
+            if args.debug:
+                now = time.monotonic()
+                fps = 1.0 / (now - fps_timer) if fps_timer else fps
+                fps_timer = now
+
+                if args.hands_only:
+                    frame = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
+
+                if draw_lm_left is not None:
+                    overlay.draw_landmarks(frame, draw_lm_left)
+                if draw_lm_right is not None:
+                    overlay.draw_landmarks(frame, draw_lm_right)
+
+                if blob_dbg_left is not None:
+                    blob_left.debug_draw(frame, blob_dbg_left[0], blob_dbg_left[1])
+                else:
+                    blob_left.debug_draw_swatch(frame, (10, 40), "L")
+
+                if blob_dbg_right is not None:
+                    blob_right.debug_draw(frame, blob_dbg_right[0], blob_dbg_right[1])
+                else:
+                    rect_w = 40
+                    blob_right.debug_draw_swatch(frame, (frame_w - rect_w - 10, 40), "R")
+
+                label = f"L:{mode_left}  R:{mode_right}"
+                cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 0), 2)
+
+                hands_present = (
+                    (left_hand.pose != Pose.AWAY or right_hand.pose != Pose.AWAY)
+                    and (ts_ms - last_seen_ms) < AWAY_AFTER_MS
+                )
+                if not hands_present:
+                    red = frame.copy()
+                    red[:] = (0, 0, 80)
+                    cv2.addWeighted(red, 0.4, frame, 0.6, 0, frame)
+
+                debug_hand = right_hand if right_hand.pose != Pose.AWAY else left_hand
+                overlay.draw(frame, debug_hand, fps)
+                cv2.imshow("Hand Gesture Capture", frame)
+
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord("q"), 27):
+                    break
+                if key == ord("o"):
+                    overlay.toggle()
 
     cap.release()
+    if args.debug:
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

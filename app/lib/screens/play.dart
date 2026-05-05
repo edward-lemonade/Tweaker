@@ -76,23 +76,25 @@ class _HandWidget extends StatelessWidget {
 	Offset get _offset => Offset(hand.x * size.width, hand.y * size.height);
 
 	@override
-	Widget build(BuildContext context) {
-		const diameter = 64.0;
-		// AnimatedPositioned smooths render position without delaying underlying data
-		return AnimatedPositioned(
-			duration: const Duration(milliseconds: 32),
-			curve: Curves.easeOut,
-			left: _offset.dx - diameter / 2,
-			top:  _offset.dy - diameter / 2,
-			child: Container(
-				width: diameter,
-				height: diameter,
-				decoration: BoxDecoration(
-					color: Colors.white.withOpacity(0.9),
-					shape: BoxShape.circle,
-				),
-				child: const Icon(Icons.back_hand, size: 32),
-			),
-		);
-	}
+  Widget build(BuildContext context) {
+    const diameter = 64.0;
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 32),
+      curve: Curves.easeOut,
+      left: _offset.dx - diameter / 2,
+      top:  _offset.dy - diameter / 2,
+      child: Transform.rotate(
+        angle: hand.theta,
+        child: Container(
+          width: diameter,
+          height: diameter,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.9),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(Icons.back_hand, size: 32),
+        ),
+      ),
+    );
+  }
 }

@@ -14,6 +14,7 @@ class Hand:
     y: float  # normalised pointer finger y [0, 1]
     vx: float  # px/s
     vy: float  # px/s
+    theta: float
     pose: Pose
 
     def as_dict(self) -> dict:
@@ -22,4 +23,4 @@ class Hand:
         return d
 
 
-AWAY_HAND = Hand(x=0.0, y=0.0, vx=0.0, vy=0.0, pose=Pose.AWAY)
+AWAY_HAND = Hand(x=0.0, y=0.0, vx=0.0, vy=0.0, theta=0.0, pose=Pose.AWAY)

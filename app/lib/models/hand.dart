@@ -1,7 +1,9 @@
 enum HandPose { flat, pinch, point, idle, away }
 
 class Hand {
-	final double x, y, vx, vy;
+	final double x, y;
+  final double vx, vy;
+  final double theta;
 	final HandPose pose;
 
 	const Hand({
@@ -9,6 +11,7 @@ class Hand {
 		required this.y,
 		required this.vx,
 		required this.vy,
+    required this.theta,
 		required this.pose,
 	});
 
@@ -17,6 +20,7 @@ class Hand {
 		y: (j['y'] as num).toDouble(),
 		vx: (j['vx'] as num).toDouble(),
 		vy: (j['vy'] as num).toDouble(),
+    theta: (j['theta'] as num).toDouble(),
 		pose: HandPose.values.byName((j['pose'] as String).toLowerCase()),
 	);
 
@@ -25,6 +29,7 @@ class Hand {
     'y': y, 
     'vx': vx, 
     'vy': vy,
+    'theta': theta,
 		'pose': pose.name.toUpperCase(),
 	};
 }
