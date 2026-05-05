@@ -96,8 +96,8 @@ class SkinBlobTracker:
 
             for cnt in contours:
                 area = cv2.contourArea(cnt)
-                if area < self.MIN_BLOB_PX:
-                    continue
+                #if area < self.MIN_BLOB_PX:
+                #    continue
                 contour_mask = np.zeros(mask.shape, dtype=np.uint8)
                 cv2.drawContours(contour_mask, [cnt], -1, 255, -1)
                 hsv_mean = cv2.mean(hsv_roi, mask=contour_mask)
@@ -108,8 +108,8 @@ class SkinBlobTracker:
                 dcr = abs(ycrcb_mean[1] - cr_c) / 255.0
                 dcb = abs(ycrcb_mean[2] - cb_c) / 255.0
                 score = dh + ds + dv + dcr + dcb
-                if cv2.pointPolygonTest(cnt, center_pt, False) < 0:
-                    score += 0.75
+                #if cv2.pointPolygonTest(cnt, center_pt, False) < 0:
+                #    score += 0.75
                 candidates.append((score, area, cnt))
 
             if candidates:
@@ -121,9 +121,9 @@ class SkinBlobTracker:
             best = max(contours, key=cv2.contourArea)
 
         area = cv2.contourArea(best)
-        if area < self.MIN_BLOB_FRAC * roi_area or area < self.MIN_BLOB_PX:
-            self._debug_blob = None
-            return None
+        #if area < self.MIN_BLOB_FRAC * roi_area or area < self.MIN_BLOB_PX:
+        #    self._debug_blob = None
+        #    return None
 
         moments = cv2.moments(best)
         if moments["m00"] == 0:

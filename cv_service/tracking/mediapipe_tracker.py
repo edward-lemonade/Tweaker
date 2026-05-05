@@ -121,7 +121,8 @@ class MediaPipeTrackingOutput:
     last_lm_right: list | None
     blob_offset_left: tuple[float, float]
     blob_offset_right: tuple[float, float]
-    detected: bool
+    left_detected: bool
+    right_detected: bool
 
 
 def track_with_mediapipe(
@@ -143,7 +144,8 @@ def track_with_mediapipe(
             last_lm_right=None,
             blob_offset_left=(0.0, 0.0),
             blob_offset_right=(0.0, 0.0),
-            detected=False,
+            left_detected=False,
+            right_detected=False,
         )
 
     left_hand = AWAY_HAND
@@ -154,6 +156,8 @@ def track_with_mediapipe(
     last_lm_right = None
     blob_offset_left = (0.0, 0.0)
     blob_offset_right = (0.0, 0.0)
+    left_detected = False
+    right_detected = False
 
     for i, lm in enumerate(result.hand_landmarks):
         side = result.handedness[i][0].category_name.lower()
@@ -170,6 +174,7 @@ def track_with_mediapipe(
             blob_left.notify(ts_s, pcx, pcy)
             blob_left.update_skin_palette(frame_bgr, lm)
             blob_offset_left = offset
+            left_detected = True
         elif side == "right":
             right_hand = _build_hand(lm, tracker_right)
             last_lm_right = lm
@@ -177,6 +182,7 @@ def track_with_mediapipe(
             blob_right.notify(ts_s, pcx, pcy)
             blob_right.update_skin_palette(frame_bgr, lm)
             blob_offset_right = offset
+            right_detected = True
 
     return MediaPipeTrackingOutput(
         left_hand=left_hand,
@@ -187,5 +193,6 @@ def track_with_mediapipe(
         last_lm_right=last_lm_right,
         blob_offset_left=blob_offset_left,
         blob_offset_right=blob_offset_right,
-        detected=True,
+        left_detected=left_detected,
+        right_detected=right_detected,
     )

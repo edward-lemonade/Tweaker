@@ -9,7 +9,12 @@ import overlay
 from messaging import emit
 from schema import AWAY_HAND, Pose
 from tracking.blob_tracker import SkinBlobTracker, track_with_blob
-from tracking.dead_reckoning_tracker import handle_missing_hand, track_with_dead_reckoning
+from tracking.dead_reckoning_tracker import (
+    draw_dead_reckoning_debug,
+    handle_missing_hand,
+    track_with_dead_reckoning,
+    update_motion_state,
+)
 from tracking.mediapipe_tracker import MODEL_PATH, ResultHolder, create_image, create_options, track_with_mediapipe
 from velocity import VelocityTracker
 
@@ -58,8 +63,8 @@ def main():
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    tracker_left = VelocityTracker(frame_w, frame_h)
-    tracker_right = VelocityTracker(frame_w, frame_h)
+    tracker_left = VelocityTracker(frame_w, frame_h, alpha=1.0)
+    tracker_right = VelocityTracker(frame_w, frame_h, alpha=1.0)
     blob_left = SkinBlobTracker(frame_w, frame_h)
     blob_right = SkinBlobTracker(frame_w, frame_h)
     holder = ResultHolder()
@@ -67,7 +72,8 @@ def main():
 
     last_left = AWAY_HAND
     last_right = AWAY_HAND
-    last_seen_ms = int(time.monotonic() * 1000)
+    last_seen_left_ms = int(time.monotonic() * 1000)
+    last_seen_right_ms = int(time.monotonic() * 1000)
     last_lm_left = None
     last_lm_right = None
     blob_offset_left = (0.0, 0.0)
@@ -100,6 +106,10 @@ def main():
             draw_lm_right = None
             blob_dbg_left = None
             blob_dbg_right = None
+            dr_dbg_left = None
+            dr_dbg_right = None
+
+            # MEDIAPIPE TRACKING
 
             mp_output = track_with_mediapipe(
                 result=result,
@@ -111,26 +121,32 @@ def main():
                 blob_right=blob_right,
             )
 
-            if mp_output.detected:
+            if mp_output.left_detected:
                 left_hand = mp_output.left_hand
-                right_hand = mp_output.right_hand
                 draw_lm_left = mp_output.draw_lm_left
-                draw_lm_right = mp_output.draw_lm_right
                 last_lm_left = mp_output.last_lm_left
-                last_lm_right = mp_output.last_lm_right
                 blob_offset_left = mp_output.blob_offset_left
-                blob_offset_right = mp_output.blob_offset_right
                 last_left = left_hand
-                last_right = right_hand
-                last_seen_ms = ts_ms
+                last_seen_left_ms = ts_ms
+                update_motion_state(tracker_left, left_hand.vx, left_hand.vy, ts_ms)
                 mode_left = "mp"
+
+            if mp_output.right_detected:
+                right_hand = mp_output.right_hand
+                draw_lm_right = mp_output.draw_lm_right
+                last_lm_right = mp_output.last_lm_right
+                blob_offset_right = mp_output.blob_offset_right
+                last_right = right_hand
+                last_seen_right_ms = ts_ms
+                update_motion_state(tracker_right, right_hand.vx, right_hand.vy, ts_ms)
                 mode_right = "mp"
-            else:
-                dt = (ts_ms - last_seen_ms) / 1000.0
+
+            if not mp_output.left_detected:
+                dt_left = (ts_ms - last_seen_left_ms) / 1000.0
 
                 missing = handle_missing_hand(
                     ts_ms=ts_ms,
-                    last_seen_ms=last_seen_ms,
+                    last_seen_ms=last_seen_left_ms,
                     away_after_ms=AWAY_AFTER_MS,
                     last_hand=last_left,
                     last_lm=last_lm_left,
@@ -141,7 +157,10 @@ def main():
                     last_left, last_lm_left, draw_lm_left, blob_dbg_left, mode_left = missing
                 else:
                     blob_hit = None
+                    '''
                     if not args.no_blob:
+                        # BLOB TRACKING
+                
                         blob_hit = track_with_blob(
                             frame=frame,
                             ts_s=ts_s,
@@ -151,19 +170,29 @@ def main():
                             blob_tracker=blob_left,
                             blob_offset=blob_offset_left,
                         )
+                    '''
+
                     if blob_hit is not None:
                         last_left, last_lm_left, draw_lm_left, blob_dbg_left, mode_left = blob_hit
+                        update_motion_state(tracker_left, last_left.vx, last_left.vy, ts_ms)
                     else:
+                        prev_lm_left = last_lm_left
                         last_left, last_lm_left, draw_lm_left, blob_dbg_left, mode_left = track_with_dead_reckoning(
                             last_hand=last_left,
                             last_lm=last_lm_left,
                             vel_tracker=tracker_left,
-                            dt_s=dt,
+                            dt_s=dt_left,
+                            frame_w=frame_w,
+                            frame_h=frame_h,
                         )
+                        dr_dbg_left = (prev_lm_left, draw_lm_left)
+
+            if not mp_output.right_detected:
+                dt_right = (ts_ms - last_seen_right_ms) / 1000.0
 
                 missing = handle_missing_hand(
                     ts_ms=ts_ms,
-                    last_seen_ms=last_seen_ms,
+                    last_seen_ms=last_seen_right_ms,
                     away_after_ms=AWAY_AFTER_MS,
                     last_hand=last_right,
                     last_lm=last_lm_right,
@@ -174,7 +203,10 @@ def main():
                     last_right, last_lm_right, draw_lm_right, blob_dbg_right, mode_right = missing
                 else:
                     blob_hit = None
+                    '''                    
                     if not args.no_blob:
+                        # BLOB TRACKING
+                        
                         blob_hit = track_with_blob(
                             frame=frame,
                             ts_s=ts_s,
@@ -184,18 +216,25 @@ def main():
                             blob_tracker=blob_right,
                             blob_offset=blob_offset_right,
                         )
+                    '''
+
                     if blob_hit is not None:
                         last_right, last_lm_right, draw_lm_right, blob_dbg_right, mode_right = blob_hit
+                        update_motion_state(tracker_right, last_right.vx, last_right.vy, ts_ms)
                     else:
+                        prev_lm_right = last_lm_right
                         last_right, last_lm_right, draw_lm_right, blob_dbg_right, mode_right = track_with_dead_reckoning(
                             last_hand=last_right,
                             last_lm=last_lm_right,
                             vel_tracker=tracker_right,
-                            dt_s=dt,
+                            dt_s=dt_right,
+                            frame_w=frame_w,
+                            frame_h=frame_h,
                         )
+                        dr_dbg_right = (prev_lm_right, draw_lm_right)
 
-                left_hand = last_left
-                right_hand = last_right
+            left_hand = last_left
+            right_hand = last_right
 
             emit(
                 args.port,
@@ -218,6 +257,10 @@ def main():
                     overlay.draw_landmarks(frame, draw_lm_left)
                 if draw_lm_right is not None:
                     overlay.draw_landmarks(frame, draw_lm_right)
+                if dr_dbg_left is not None:
+                    draw_dead_reckoning_debug(frame, dr_dbg_left[0], dr_dbg_left[1], "L")
+                if dr_dbg_right is not None:
+                    draw_dead_reckoning_debug(frame, dr_dbg_right[0], dr_dbg_right[1], "R")
 
                 if blob_dbg_left is not None:
                     blob_left.debug_draw(frame, blob_dbg_left[0], blob_dbg_left[1])
@@ -235,7 +278,10 @@ def main():
 
                 hands_present = (
                     (left_hand.pose != Pose.AWAY or right_hand.pose != Pose.AWAY)
-                    and (ts_ms - last_seen_ms) < AWAY_AFTER_MS
+                    and (
+                        (left_hand.pose != Pose.AWAY and (ts_ms - last_seen_left_ms) < AWAY_AFTER_MS)
+                        or (right_hand.pose != Pose.AWAY and (ts_ms - last_seen_right_ms) < AWAY_AFTER_MS)
+                    )
                 )
                 if not hands_present:
                     red = frame.copy()
