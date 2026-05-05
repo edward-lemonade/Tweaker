@@ -53,9 +53,7 @@ class HandService {
 			final dg = _socket!.receive();
 			if (dg == null) return;
 			try {
-				final raw = utf8.decode(dg.data);
-				print('[hand_service] recv: $raw');
-				final json = jsonDecode(raw) as Map<String, dynamic>;
+				final json = jsonDecode(utf8.decode(dg.data)) as Map<String, dynamic>;
 				_onPacket(json);
 			} catch (_) {}
 		});

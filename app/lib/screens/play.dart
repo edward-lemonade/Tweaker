@@ -78,7 +78,10 @@ class _HandWidget extends StatelessWidget {
 	@override
 	Widget build(BuildContext context) {
 		const diameter = 64.0;
-		return Positioned(
+		// AnimatedPositioned smooths render position without delaying underlying data
+		return AnimatedPositioned(
+			duration: const Duration(milliseconds: 32),
+			curve: Curves.easeOut,
 			left: _offset.dx - diameter / 2,
 			top:  _offset.dy - diameter / 2,
 			child: Container(
